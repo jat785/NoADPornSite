@@ -206,6 +206,26 @@ node --version        # 可选；没装也不影响另两个站
 | `Microsoft Visual C++ ... required` / `error: can't find Rust compiler` | 在源码编译而不是装现成包 | 一般是平台/Python 版本没有预编译包，见上面 Intel Mac 那条 |
 | pip 卡住 / `SSLError` / `ConnectionError` | 网络 | 换镜像：`-i https://pypi.tuna.tsinghua.edu.cn/simple` |
 
+> **装好了但用起来报 4xx（403 / 410 / 451 / 429…）怎么读？**
+>
+> 这类错是**上游站点拒绝了这次请求**，而**原因不在状态码里，在响应体里**。
+> 所以本项目的错误信息会把上游原文一并带出来，形如：
+>
+> ```
+> 错误：HTTP 410 Gone ｜ server=cloudflare ｜ 上游说：Sorry, you have been blocked …
+> ```
+>
+> 对照着读：
+>
+> | 上游原文里出现 | 说明 | 怎么办 |
+> |---|---|---|
+> | `cloudflare` / `Attention Required` / `blocked` | 是 **CDN 层的风控**拦的，不是站点本身 | 换一个**未被拉黑**的代理出口节点；机房 IP、公共 VPN 段最容易被拦 |
+> | 地区 / 年龄验证 / `not available in your` 之类字样 | 该站点在该地区**已停止服务** | 换节点到别的地区。注意 PornHub 因年龄验证法规已在 25 个美国州 + 3 个国家停止服务，而**同属 Aylo 的 RedTube 没有跟进** —— 所以"RedTube 能用、PornHub 410"是正常现象 |
+> | 一片空白（`上游 body 为空`） | 多半是你**本地代理**直接拒绝的，不是站点回的 | 检查代理的分流规则，看这个域名是否被某条规则 REJECT 或指向了不可用节点 |
+> | `Too Many Requests` / `429` | 请求太频繁 | 等一会儿；或降低"随机推荐"的刷新频率 |
+>
+> **同一个程序在别人机器上正常、在你这 410，几乎总是出口 IP 的问题，不是代码。**
+
 ### 2. 把这段模板丢给 AI（ChatGPT / Claude / DeepSeek 都行）
 
 装环境的问题几乎都是"平台 + 版本"的特定组合，说清楚这几样 AI 基本一次就能给准：

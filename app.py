@@ -696,6 +696,65 @@ def host_allowed(url: str) -> bool:
 
 
 # --------------------------------------------------------------------------- #
+# 上游失败的诊断信息
+# --------------------------------------------------------------------------- #
+
+# 上游返回"拒绝"类状态码（403 / 410 / 451 / 429…）时，**原因几乎总在 body 里**，
+# 状态码本身没有信息量。实测踩过这个坑：PornHub 对某个出口 IP 稳定返回 410，
+# 光看 "410 Gone" 完全分不清是「地区不提供服务」「被风控判定为机器人」
+# 「Cloudflare 挑战」还是「本地代理在拦」—— 而那三种的应对方式完全不同。
+_ERR_SNIPPET_LIMIT = 400
+
+
+def _body_snippet(text: str, limit: int = _ERR_SNIPPET_LIMIT) -> str:
+    """把上游 body 压成一行可读纯文本。
+
+    去掉 script/style 和标签，HTML 反转义，空白折叠 —— 因为 Cloudflare 的页面
+    和站点的提示页都是几百 KB 的 HTML，原样塞进错误信息没法看。
+    """
+    if not text:
+        return ""
+    t = re.sub(r"<(script|style|noscript)\b.*?</\1\s*>", " ", text, flags=re.S | re.I)
+    t = re.sub(r"<!--.*?-->", " ", t, flags=re.S)
+    t = re.sub(r"<[^>]+>", " ", t)
+    t = html_mod.unescape(t)
+    t = re.sub(r"\s+", " ", t).strip()
+    return t[:limit] + "…" if len(t) > limit else t
+
+
+def upstream_error_detail(exc: Exception) -> str:
+    """把上游异常变成「状态码 + 关键响应头 + body 摘要」。
+
+    对非 HTTP 错误（连接超时、DNS 失败等）就退回原始的异常文本。
+    """
+    resp = getattr(exc, "response", None)
+    if resp is None:
+        return str(exc)
+
+    bits = [f"HTTP {resp.status_code} {resp.reason_phrase}".strip()]
+    # 这几个头能直接说明"是谁在拒绝你"：
+    #   server: cloudflare  -> 是 CDN 层拦的，不是站点本身
+    #   cf-mitigated        -> Cloudflare 明确标注了拦截类型（如 challenge）
+    for h in ("server", "cf-mitigated", "cf-ray"):
+        if v := resp.headers.get(h):
+            bits.append(f"{h}={v}")
+
+    try:
+        body = resp.text
+    except Exception:  # noqa: BLE001
+        # 流式响应还没读、或已被关闭 —— 拿不到 body 就没必要硬来
+        body = ""
+
+    snip = _body_snippet(body)
+    if snip:
+        bits.append(f"上游说：{snip}")
+    elif not body:
+        bits.append("（上游 body 为空 —— 通常是代理层直接拒绝，而不是站点回的）")
+
+    return " ｜ ".join(bits)
+
+
+# --------------------------------------------------------------------------- #
 # hanime.tv 运行时状态
 # --------------------------------------------------------------------------- #
 # 签名助手是个 Node 常驻子进程，加上 vendor 需要联网抓取 —— 都是**懒加载**：
@@ -932,7 +991,9 @@ async def api_search(
         r = await client.get(url, headers=headers)
         r.raise_for_status()
     except httpx.HTTPError as exc:
-        raise HTTPException(502, f"搜索请求失败：{exc}") from exc
+        raise HTTPException(
+            502, f"搜索请求失败（{adapter.name}）：{upstream_error_detail(exc)}"
+        ) from exc
 
     items, total_pages, total_count = adapter.parse_search(r.text, page)
     payload = {
@@ -983,7 +1044,7 @@ async def _search_catalog(
     try:
         data = await run_in_threadpool(_work)
     except httpx.HTTPError as exc:
-        raise HTTPException(502, f"hanime 目录获取失败：{exc}") from exc
+        raise HTTPException(502, f"hanime 目录获取失败：{upstream_error_detail(exc)}") from exc
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(502, f"hanime 目录不可用：{type(exc).__name__}: {exc}") from exc
 
@@ -1112,7 +1173,7 @@ async def _browse_rows(
     union = _browse_union(adapter)
     if union:
         return union                      # 新页全挂了，但旧池子还能用
-    raise HTTPException(502, f"浏览页请求失败：{last_exc}")
+    raise HTTPException(502, f"浏览页请求失败（{adapter.name}）：{upstream_error_detail(last_exc)}")
 
 
 # 站点累积候选池最多留多少条，防止长跑时无限增长
@@ -1224,7 +1285,7 @@ def _resolve_hanime(url: str) -> dict[str, Any]:
     except hanime_mod.SignerError as exc:
         raise HTTPException(502, f"hanime 取流失败：{exc}") from exc
     except httpx.HTTPError as exc:
-        raise HTTPException(502, f"hanime 取流网络错误：{exc}") from exc
+        raise HTTPException(502, f"hanime 取流网络错误：{upstream_error_detail(exc)}") from exc
 
     meta = catalog["by_slug"].get(slug) or {}
     if not streams:
@@ -1292,7 +1353,7 @@ async def api_thumb(
         r = await client.get(adapter.video_page_url(id), headers=headers)
         r.raise_for_status()
     except httpx.HTTPError as exc:
-        raise HTTPException(502, f"取视频页失败：{exc}") from exc
+        raise HTTPException(502, f"取视频页失败：{upstream_error_detail(exc)}") from exc
 
     m = _RE_OG_IMAGE.search(r.text) or _RE_OG_IMAGE_REV.search(r.text)
     url = html_mod.unescape(m.group(1)).strip() if m else ""
@@ -1362,7 +1423,11 @@ async def _open_upstream(
             await direct.aclose()
             last = exc
 
-    raise HTTPException(502, f"上游连不上（代理与直连都试过了）：{last!r}")
+    raise HTTPException(
+        502,
+        f"上游连不上（代理与直连都试过了）："
+        f"{upstream_error_detail(last) if last else '未知错误'}",
+    )
 
 
 @app.get("/api/media")
