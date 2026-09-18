@@ -95,7 +95,7 @@ Windows 双击 `start.bat`，macOS / Linux 跑 `./start.sh` —— 两者做的�
 
 #### Windows：双击 `start.bat`
 
-1. 装好 Python（3.10+，且进了 PATH）、node（18+，且进了 PATH）
+1. 装好 Python（3.10+，且进了 PATH）
 2. **双击 `start.bat`**
 3. 浏览器打开 <http://127.0.0.1:8000>
 
@@ -108,21 +108,31 @@ Windows 双击 `start.bat`，macOS / Linux 跑 `./start.sh` —— 两者做的�
 2. 在项目目录里跑 `./start.sh`（首次没有执行权限就先 `chmod +x start.sh`）
 3. 浏览器打开 <http://127.0.0.1:8000>
 
-**依赖是自动装的，不用手动 `pip install`。** 两个脚本依次做这几件事：
+**依赖是自动装的，不用手动 `pip install`，而且两个脚本都装进项目自己的 `.venv`，
+不污染全局环境。** 它们依次做这几件事：
 
 ```
-检查 python 在不在 PATH        不在   → 报错退出，并给出下载地址
-检查 Python 版本 >= 3.10       不够   → 报错退出（否则 pip 只会丢一堆看不懂的解析错误）
-建 venv（仅 .sh）              没有   → uv venv --seed，没有 uv 就用 python -m venv（PEP 668，见方式二）
-用 import 试探依赖装没装        缺了   → 自动 pip install -r requirements.txt
-找不到 node 时给一句提示        不拦   → RedTube / PornHub 照常可用，只是 hanime 用不了
-找不到 ffmpeg 时给一句提示      不拦   → 播放不受影响，只是 hanime 的「下载」用不了
-探一下出口代理通不通（仅 .sh）  不通   → 只警告不拦，并提示怎么换出口
+先看有没有可用的 .venv            有     → 直接复用，跳过下面三步（约 2 秒）
+没有，才检查 python 在不在 PATH    不在   → 报错退出，并给出下载地址
+检查 Python 版本 >= 3.10          不够   → 报错退出（否则 pip 只会丢一堆看不懂的解析错误）
+建 .venv                        失败   → 报错退出（.sh 优先 uv venv --seed，没有 uv 就用 python -m venv）
+用 import 试探依赖装没装           缺了   → 装进 .venv（不动全局 site-packages）
+找不到 node 时给一句提示           不拦   → RedTube / PornHub 照常可用，只是 hanime 用不了
+找不到 ffmpeg 时给一句提示         不拦   → 播放不受影响，只是 hanime 的「下载」用不了
+探一下出口代理通不通（仅 .sh）     不通   → 只警告不拦，并提示怎么换出口
 最后启动 app.py
 ```
 
-所以**第一次跑会先把依赖装上（需要联网，几十 MB 量级），之后就秒开**。
+所以**第一次跑要建环境 + 装依赖（联网，几十 MB，实测约 70 秒），之后就秒开**。
 
+> **为什么要建 `.venv` 而不是装到全局**：全局只有一份 site-packages，两个项目要同一个库
+> 的不同版本时只能有一个赢；而且以后卸载时分不清哪些包是自己要的、哪些是某个项目带进来的。
+> 代价是磁盘上多占约 **65 MB**，但**不会额外下载** —— pip 的 wheel 缓存会命中。
+> 想彻底清掉就删掉 `.venv` 目录（它已在 `.gitignore` 里）。
+>
+> **已有的 `.venv` 优先复用**：即使系统 Python 后来变旧了，只要 `.venv` 里的解释器
+> 还够用，脚本就不会因为系统版本而拒绝启动；只有真的要新建时才检查系统 Python。
+>
 > **两个脚本都只自动装 Python 依赖，不会装 Node 或 ffmpeg** —— 那两个不是 pip 包，
 > 脚本只能检测到缺失后提示你。想用 hanime.tv 就去 [nodejs.org](https://nodejs.org/)
 > 装 Node；想下载 hanime 的视频再去装 [ffmpeg](https://www.gyan.dev/ffmpeg/builds/)。
@@ -131,7 +141,7 @@ Windows 双击 `start.bat`，macOS / Linux 跑 `./start.sh` —— 两者做的�
 > 装依赖走的是系统网络 / pip 自己的代理设置，**不走上面那个出口代理**。
 > 国内网络嫌慢可以换镜像：
 > ```bash
-> python -m pip install -r requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
+> .venv\Scripts\python.exe -m pip install -r requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
 > ```
 
 > **`start.sh` 的代理判定**：启动前它先探一下默认端口 `7890` 通不通 —— 通就自动
@@ -145,10 +155,10 @@ Windows 双击 `start.bat`，macOS / Linux 跑 `./start.sh` —— 两者做的�
 
 ### 方式二：自己装依赖再启动（跨平台，mac、linux）
 
-**这一步请务必用虚拟环境。** macOS（Homebrew）和 Ubuntu 23.04+ / Debian 12+ 的系统
-Python 受 [PEP 668](https://peps.python.org/pep-0668/) 保护，直接 `pip install` 会被
-拦下来报 `externally-managed-environment`。Windows 没这个限制，但用 venv 同样是
-好习惯（`start.bat` 没有这么干，想的话在windows你也可以手动装依赖）。
+和方式一做的事一样，只是手动来 —— **同样务必用虚拟环境**。
+macOS（Homebrew）和 Ubuntu 23.04+ / Debian 12+ 的系统 Python 受
+[PEP 668](https://peps.python.org/pep-0668/) 保护，直接 `pip install` 会被拦下来报
+`externally-managed-environment`。Windows 没这个限制，但隔离本身就有价值。
 
 ```bash
 python3 -m venv .venv            # Linux 上报错就先 sudo apt install python3-venv
