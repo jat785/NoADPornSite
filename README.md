@@ -68,6 +68,10 @@ Windows 的安装包直接下；**macOS / Linux 那两行是按开源圈最常�
 > 用 `ADSKIPER_FFMPEG=/path/to/ffmpeg` 指绝对路径即可。
 > 启动后也可以打开 <http://127.0.0.1:8000/api/sites> 看 `ffmpeg` 字段是不是 `null`。
 
+> **上面这张表是安装命令，没逐条验证过**：实测机上没装 Homebrew（Python 来自 uv、
+> Node 来自 nodejs.org 安装包、ffmpeg 没装），所以这三行的标注保持原样。
+> 实测过的是**方式一的 `./start.sh`** —— 见下面那一节。
+
 ### 还需要一个能连出去的代理
 
 站点和它们的 CDN 都在墙外，后端默认出口是 `http://127.0.0.1:7890`
@@ -84,26 +88,42 @@ Windows 的安装包直接下；**macOS / Linux 那两行是按开源圈最常�
 
 两条路，选一条就行 —— 跑起来的是同一个东西。
 
-### 方式一：双击 `start.bat`（仅 Windows，最快）
+### 方式一：一键启动脚本（最快）
+
+Windows 双击 `start.bat`，macOS / Linux 跑 `./start.sh` —— 两者做的事一样，
+都自动建好环境、装好依赖，然后启动。
+
+#### Windows：双击 `start.bat`
 
 1. 装好 Python（3.10+，且进了 PATH）、node（18+，且进了 PATH）
 2. **双击 `start.bat`**
 3. 浏览器打开 <http://127.0.0.1:8000>
 
-**依赖是自动装的，不用手动 `pip install`。** `start.bat` 依次做五件事：
+#### macOS / Linux：`./start.sh`
+
+已在 **macOS (Apple Silicon)** 上实测通过（建 venv → 装依赖 → 检查 Node / ffmpeg →
+判定出口代理 → 首页 HTTP 200）；**Linux 未实测**。
+
+1. 装好 Python（3.10+）和 node（18+，可选）
+2. 在项目目录里跑 `./start.sh`（首次没有执行权限就先 `chmod +x start.sh`）
+3. 浏览器打开 <http://127.0.0.1:8000>
+
+**依赖是自动装的，不用手动 `pip install`。** 两个脚本依次做这几件事：
 
 ```
 检查 python 在不在 PATH        不在   → 报错退出，并给出下载地址
 检查 Python 版本 >= 3.10       不够   → 报错退出（否则 pip 只会丢一堆看不懂的解析错误）
+建 venv（仅 .sh）              没有   → uv venv --seed，没有 uv 就用 python -m venv（PEP 668，见方式二）
 用 import 试探依赖装没装        缺了   → 自动 pip install -r requirements.txt
 找不到 node 时给一句提示        不拦   → RedTube / PornHub 照常可用，只是 hanime 用不了
 找不到 ffmpeg 时给一句提示      不拦   → 播放不受影响，只是 hanime 的「下载」用不了
-最后 python app.py
+探一下出口代理通不通（仅 .sh）  不通   → 只警告不拦，并提示怎么换出口
+最后启动 app.py
 ```
 
-所以**第一次双击会先把依赖装上（需要联网，几十 MB 量级），之后就秒开**。
+所以**第一次跑会先把依赖装上（需要联网，几十 MB 量级），之后就秒开**。
 
-> **`start.bat` 只自动装 Python 依赖，不会装 Node 或 ffmpeg** —— 那两个不是 pip 包，
+> **两个脚本都只自动装 Python 依赖，不会装 Node 或 ffmpeg** —— 那两个不是 pip 包，
 > 脚本只能检测到缺失后提示你。想用 hanime.tv 就去 [nodejs.org](https://nodejs.org/)
 > 装 Node；想下载 hanime 的视频再去装 [ffmpeg](https://www.gyan.dev/ffmpeg/builds/)。
 > **两个都不装也不影响 RedTube / PornHub。**
@@ -113,6 +133,15 @@ Windows 的安装包直接下；**macOS / Linux 那两行是按开源圈最常�
 > ```bash
 > python -m pip install -r requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
 > ```
+
+> **`start.sh` 的代理判定**：启动前它先探一下默认端口 `7890` 通不通 —— 通就自动
+> 用它，不通就按**直连**跑。所以用 Shadowrocket / Surge 这类**系统级 VPN**
+> （在 IP 层接管全部流量、没有本地 HTTP 代理端口）时什么都不用配；
+> 反过来，这类方案下**不要**设 `ADSKIPER_PROXY`，设了反而连不上。
+> 想强制指定或强制直连见「配置」。
+>
+> **`start.sh` 认 `ADSKIPER_NODE_BIN` / `ADSKIPER_FFMPEG`**：node 或 ffmpeg 不在
+> PATH 里时，用这两个变量指绝对路径，脚本的检查会跟着认（`start.bat` 只查 PATH）。
 
 ### 方式二：自己装依赖再启动（跨平台，mac、linux）
 
@@ -138,7 +167,7 @@ python app.py
 > `requirements.txt` 里已经用环境标记（marker）帮你把上界卡在 49 以下，正常情况
 > 不用管；万一还是报编译错误，单独跑 `python -m pip install "cryptography<49"`。
 
-**macOS / Linux 上没有 `start.bat`，用python app.py启动。** 然后浏览器打开 <http://127.0.0.1:8000>。
+然后浏览器打开 <http://127.0.0.1:8000>。嫌这一串步骤麻烦，直接用方式一的 `./start.sh` 就行。
 
 装完可以自检一下：
 
@@ -159,6 +188,7 @@ node --version        # 可选；没装也不影响另两个站
 | 报错里出现 | 意思 | 怎么办 |
 |---|---|---|
 | `externally-managed-environment` | 没在虚拟环境里装 | 回到方式二，先 `source .venv/bin/activate` |
+| `No module named pip` | 复用了 uv 建的 venv —— uv 默认**不往 venv 里装 pip** | `./start.sh` 会自己用 `ensurepip` 补上；手动跑就 `python -m ensurepip --upgrade`，或删掉 `.venv` 重来 |
 | `No module named venv` / `ensurepip is not available` | 缺 `python3-venv` | `sudo apt install python3-venv` |
 | `command not found: python` | 只有 `python3` | 命令里的 `python` 换成 `python3` |
 | `command not found: node` | 没装 Node | 只影响 hanime，见「前置环境」 |
@@ -203,6 +233,14 @@ node --version 输出：<...>
 ```powershell
 $env:ADSKIPER_PROXY = "socks5://127.0.0.1:7891"   # 或留空表示直连
 python app.py
+```
+
+用 `start.sh` 时可以直接写在命令行上，不用先 export：
+
+```bash
+ADSKIPER_PROXY=socks5://127.0.0.1:7891 ./start.sh   # 指定出口
+ADSKIPER_PROXY= ./start.sh                          # 强制直连（系统级 VPN 方案）
+./start.sh                                          # 不设 = 自动探测 7890，不通就直连
 ```
 
 全部环境变量：
